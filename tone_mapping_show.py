@@ -24,7 +24,7 @@ config = {
 }
 
 def resource_path(relative_path):
-    """ 获取资源的绝对路径（兼容打包后的单文件模式） """
+    # 为配合可能打包组装.exe文件时寻址可能产生的问题，定义路径寻址方法
     if hasattr(sys, '_MEIPASS'):
         base_path = sys._MEIPASS  # 临时解压目录
     else:
@@ -78,10 +78,8 @@ class HDRGANApp(QMainWindow):
         # 图像显示区域
         self.input_label = QLabel(self)
         self.output_label = QLabel(self)
-        # self.input_label.setFixedSize(512, 512)
         self.input_label.setGeometry(150, 100, 512, 512)
         self.input_label.setStyleSheet("background-color: rgb(55, 0, 155);")
-        # self.output_label.setFixedSize(512, 512)
         self.output_label.setGeometry(1400-662, 100, 512, 512)
         self.output_label.setStyleSheet("background-color: rgb(55, 0, 155);")
 
@@ -181,7 +179,7 @@ class HDRGANApp(QMainWindow):
 
     # 色调映射功能
     def tone_mapping(self, hdr_path):
-        """扩展的色调映射方法，新增Mantiuk算法和Exposure Fusion"""
+        # 色调映射多种方法叠加
         try:
             hdr = imageio.imread(hdr_path).astype(np.float32)
             hdr_rgb = cv2.cvtColor(hdr, cv2.COLOR_RGB2BGR)
@@ -226,7 +224,7 @@ class HDRGANApp(QMainWindow):
             return [], []
 
     def robust_normalize(self, hdr):
-        """鲁棒的HDR归一化（排除0.1%极端值）"""
+        # 归一化方法之一
         # 计算分位数
         p_low = np.percentile(hdr, 0.1)
         p_high = np.percentile(hdr, 99.9)
@@ -236,7 +234,7 @@ class HDRGANApp(QMainWindow):
         return cv2.normalize(hdr_clipped, None, 0.0, 1.0, cv2.NORM_MINMAX)
 
     def exposure_fusion(self, hdr, exposures):
-        """多曝光融合算法"""
+        # 多曝光融合，效果不佳未启用
         # 生成多曝光序列
         exposures = [cv2.convertScaleAbs(hdr, alpha=10 ** e) for e in exposures]
 
@@ -246,7 +244,7 @@ class HDRGANApp(QMainWindow):
         return fusion
 
     def aces_filmic(self, hdr):
-        """ACES Filmic色调映射（电影级效果）"""
+        # ACES色调映射方法
         # 调整输入范围
         # x = hdr * 0.8  # 曝光调整
         x = hdr
@@ -260,6 +258,7 @@ class HDRGANApp(QMainWindow):
         return (x * (a * x + b)) / (x * (c * x + d) + e)
 
     def tone_mapping_model_trainer(self, img, low_percentile=0.1, high_percentile=99.9, gamma=0.7):
+        # 与模型训练时等效的色调映射方法
         # 分位数截断（排除极端噪声/过曝）
         p_low = np.percentile(img, low_percentile)
         p_high = np.percentile(img, high_percentile)
@@ -281,7 +280,7 @@ class HDRGANApp(QMainWindow):
         return img_gamma
 
     def calculate_image_metrics(self, image):
-        """综合图像质量评估"""
+        # 色调映射效果量化指标测评
         gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY).astype(np.float32)
 
         # 对比度（标准差）
@@ -307,7 +306,7 @@ class HDRGANApp(QMainWindow):
             '动态范围': round(dynamic_range, 2)
         }
 
-    # 在界面类中新增导出方法
+    # 在界面类中新增导出方法，暂未启用
     def export_metrics(self):
         if not hasattr(self, 'tmo_metrics') or not self.tmo_metrics:
             return
@@ -330,6 +329,7 @@ class HDRGANApp(QMainWindow):
                     ])
 
     def load_hdr_and_tone_map(self):
+      # 导入.hdr文件
         path, _ = QFileDialog.getOpenFileName(self, '选择HDR文件', '', 'HDR文件 (*.hdr)')
         if path:
             self.tmo_results, self.performance = self.tone_mapping(path)
