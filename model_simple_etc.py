@@ -9,53 +9,8 @@ import numpy as np
 from tensorflow.python.training.moving_averages import ExponentialMovingAverage
 from tensorflow.keras.mixed_precision import LossScaleOptimizer
 
-# @register_keras_serializable()
-# class SpectralNormalization(layers.Wrapper):
-#     def __init__(self, layer, power_iterations=3, **kwargs):
-#         super().__init__(layer, **kwargs)
-#         self.power_iterations = power_iterations
-#
-#     def build(self, input_shape):
-#         super().build(input_shape)
-#         if not self.built:
-#             self.layer.build(input_shape)  # 确保被包装层已构建
-#             self.w = self.layer.kernel
-#             self.w_shape = self.w.shape.as_list()
-#             self.u = self.add_weight(
-#                 shape=(1, self.w_shape[-1]),
-#                 initializer="random_normal",
-#                 trainable=False,
-#                 dtype=tf.float32
-#             )
-#             self.built = True
-#
-#     def call(self, inputs):
-#         if not self.built:
-#             self.build(inputs.shape)  # 防御性调用
-#         if self.trainable:
-#             w = tf.reshape(self.w, [-1, self.w_shape[-1]])
-#             u_hat = self.u
-#             for _ in range(self.power_iterations):
-#                 v_hat = tf.math.l2_normalize(tf.matmul(u_hat, w, transpose_b=True))
-#                 u_hat = tf.math.l2_normalize(tf.matmul(v_hat, w))
-#             sigma = tf.matmul(tf.matmul(v_hat, w), u_hat, transpose_b=True)
-#             sigma = tf.maximum(sigma, 1e-12)
-#             self.layer.kernel.assign(self.w / sigma)
-#         return self.layer(inputs)
-#
-#     def compute_output_spec(self, inputs):
-#         return self.layer.compute_output_spec(inputs)  # 显式定义输出形状
-#
-#     def get_config(self):
-#         config = super().get_config()
-#         config.update({"power_iterations": self.power_iterations})
-#         return config
-
 class SpectralNormalization(layers.Wrapper):
-    """
-    谱归一化层（Spectral Normalization）
-    通过约束权重矩阵的谱范数稳定训练
-    """
+    # 自定义模组：谱归一化
     def __init__(self, layer, power_iterations=5, **kwargs):
         super().__init__(layer, **kwargs)
         self.power_iterations = power_iterations
@@ -83,12 +38,7 @@ class SpectralNormalization(layers.Wrapper):
         self.layer.kernel.assign(self.w / sigma)
         return self.layer(inputs)
 
-# def perceptual_loss(y_true, y_pred):
-#     vgg = tf.keras.applications.VGG19(include_top=False, weights='imagenet')
-#     true_features = vgg(y_true)
-#     pred_features = vgg(y_pred)
-#     return tf.reduce_mean(tf.square(true_features - pred_features))
-
+# 多尺度损失函数计算函数
 def perceptual_loss(y_true, y_pred):
     vgg = tf.keras.applications.VGG19(include_top=False, weights='imagenet')
     # 提取多层级特征（如 block1, block3, block5）
@@ -104,16 +54,19 @@ def perceptual_loss(y_true, y_pred):
         loss += tf.reduce_mean(tf.square(t - p))
     return loss / len(layer_names)  # 平均多尺度损失
 
+# 颜色损失函数计算函数
 def color_consistency_loss(y_true, y_pred):
     # 计算 RGB 通道均值的差异
     true_mean = tf.reduce_mean(y_true, axis=[1, 2])
     pred_mean = tf.reduce_mean(y_pred, axis=[1, 2])
     return tf.reduce_mean(tf.abs(true_mean - pred_mean))
 
+# l1损失函数计算函数
 def smooth_l1_loss(y_true, y_pred):
     diff = tf.abs(y_true - y_pred)
     return tf.reduce_mean(tf.where(diff < 1.0, 0.5 * diff ** 2, diff - 0.5))
 
+# SE注意力自定义模块
 def se_block(x, ratio=8):
     channels = x.shape[-1]
     se = layers.GlobalAveragePooling2D()(x)
@@ -122,6 +75,7 @@ def se_block(x, ratio=8):
     se = layers.Dense(channels, activation='sigmoid')(se)
     return layers.Multiply()([x, se])
 
+# 模型大类
 class HDR_GAN:
     def __init__(self, config):
         self.batch_size = config['batch_size']
@@ -162,14 +116,7 @@ class HDR_GAN:
         self.gen_optimizer = tf.keras.optimizers.Adam(
             self.gen_lr, beta_1=0.5, beta_2=0.999, clipvalue=10
         )
-        # self.gen_optimizer = tf.keras.optimizers.Adam(1e-4, beta_1=0.5, beta_2=0.9)
-        # # 添加EMA封装
-        # self.gen_optimizer = LossScaleOptimizer(self.gen_optimizer)
-        # self.gen_optimizer = tf.keras.optimizers.MovingAverage(
-        #     self.gen_optimizer, average_decay=0.999
-        # )
         self.disc_optimizer = tf.keras.optimizers.Adam(self.disc_lr, beta_1=0.5, beta_2=0.9)
-        # self.disc_optimizer = tf.keras.optimizers.Adam(1e-4, beta_1=0.5, beta_2=0.999)  # 更低的学习率
 
     def build_generator(self):
         inputs = layers.Input(shape=(self.image_size, self.image_size, self.c_dim * self.input_photo_num))
@@ -209,6 +156,7 @@ class HDR_GAN:
     def build_discriminator(self):
         inputs = layers.Input(shape=(self.image_size, self.image_size, self.c_dim))
 
+        # 为解决判别器在CPU训练时速度过慢且中前期易模式崩溃的问题，移除注意力机制
         # 第一层卷积 + SE注意力
         x = SpectralNormalization(layers.Conv2D(64, (4, 4), strides=2, padding='same'))(inputs)
         # x = layers.Conv2D(64, (4, 4), strides=2, padding='same')(inputs)
@@ -268,17 +216,11 @@ class HDR_GAN:
             )
             fake_output = self.discriminator(generated_images_noisy, training=True)
             adv_loss = -tf.reduce_mean(fake_output)  # 原始对抗损失
-            # l1_loss = tf.reduce_mean(tf.abs(hdr_images - generated_images))  # 增强L1约束
             mask = tf.cast(hdr_images < 0.2, tf.float32)
             l1_loss = 0.5 * tf.reduce_mean(tf.abs(hdr_images - generated_images)) + \
                       0.5 * tf.reduce_mean(tf.abs(hdr_images - generated_images) * mask)
-            # l1_loss = smooth_l1_loss(hdr_images, fake_output)
             vgg_loss = perceptual_loss(hdr_images, generated_images)
             total_epochs = 100
-            # l1_weight = 0.5 + 0.1 * (epoch / total_epochs)  # 从0.8降至0.5
-            # adv_weight = 0.4 - 0.1 * (epoch / total_epochs)  # 从0.1升至0.4
-            # vgg_weight = 0.4 + 0.1 * (epoch / total_epochs)  # 从0.3升至0.4
-            # color_weight = 0.1
             l1_weight = 0.6
             adv_weight = 0.3
             vgg_weight = 0.5
